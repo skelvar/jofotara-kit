@@ -41,7 +41,7 @@ curl -s http://127.0.0.1:8080/core/invoices/ \
 ## Install the agent skill
 
 ```bash
-npx skills add <owner>/jofotara-kit
+npx skills add skelvar/jofotara-kit
 ```
 
 Or copy [`skills/jofotara`](skills/jofotara) into your agent's skills folder
