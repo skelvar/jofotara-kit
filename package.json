@@ -1,0 +1,49 @@
+{
+  "name": "jofotara-kit",
+  "version": "0.1.0",
+  "description": "Local mock server, XML validator and AI agent skill for JoFotara (Jordan ISTD e-invoicing) integrations.",
+  "type": "module",
+  "bin": {
+    "jofotara-kit": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "prepare": "tsc",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "jofotara",
+    "fawtara",
+    "jordan",
+    "istd",
+    "e-invoicing",
+    "ubl",
+    "invoice",
+    "validator",
+    "mock-server",
+    "agent-skill"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.12"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.5",
+    "typescript": "6.0.3"
+  }
+}
