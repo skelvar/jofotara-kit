@@ -38,6 +38,20 @@ curl -s http://127.0.0.1:8080/core/invoices/ \
   -d "$(npx jofotara-kit template invoice --body)"
 ```
 
+## MCP server
+
+Give any MCP client (Claude Code, Cursor, Devin, Windsurf, …) direct access to the validator:
+
+```json
+{
+  "mcpServers": {
+    "jofotara": { "command": "npx", "args": ["-y", "jofotara-kit", "mcp"] }
+  }
+}
+```
+
+Tools: `validate_invoice`, `get_template`, `list_rules`, `explain_rule`.
+
 ## Install the agent skill
 
 ```bash
@@ -55,6 +69,7 @@ Or copy [`skills/jofotara`](skills/jofotara) into your agent's skills folder
 | `serve [--port] [--host] [--client-id] [--secret-key] [--reject-status]` | Run the mock. With `--client-id/--secret-key` only those credentials pass. `--reject-status 200` tests "HTTP 200 but rejected" handling. |
 | `template <invoice\|credit-note\|income-invoice\|income-credit-note> [--body]` | Print a sample XML, or its JSON request body. |
 | `rules [--json]` | List every rule. |
+| `mcp` | MCP server over stdio. |
 
 Mock extras: `GET /_kit/invoices` lists accepted documents, `DELETE /_kit/invoices` resets.
 Mock responses add a `JOFOTARA_KIT` key with full findings and fixes; everything else mirrors

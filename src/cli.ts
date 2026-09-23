@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { parseArgs, styleText } from 'node:util';
+import { serveMcpStdio } from './mcp.ts';
 import { createMockServer } from './mock.ts';
 import { RULES } from './rules.ts';
-import { sampleCreditNote, sampleInvoice, toRequestBody } from './templates.ts';
+import { TEMPLATES, toRequestBody } from './templates.ts';
+import type { TemplateName } from './templates.ts';
 import { validate } from './validate.ts';
 import type { Report } from './validate.ts';
 
@@ -16,6 +18,7 @@ Usage:
   jofotara-kit template <invoice|credit-note|income-invoice|income-credit-note> [--body]
                                                Print a live-accepted sample (or its JSON request body)
   jofotara-kit rules [--json]                  List every rule with severity and confidence
+  jofotara-kit mcp                             MCP server over stdio (validate_invoice, get_template, list_rules, explain_rule)
 
 Exit codes: 0 ok, 1 validation errors, 2 usage error.
 Not affiliated with the Income and Sales Tax Department (ISTD).`;
@@ -82,21 +85,20 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'template': {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { body: { type: 'boolean' } } });
-      const original = { id: 'INV-001', uuid: '00000000-0000-4000-8000-000000000000' };
-      const templates: Record<string, () => string> = {
-        invoice: () => sampleInvoice(),
-        'credit-note': () => sampleCreditNote({ ...original, payable: 27.04 }),
-        'income-invoice': () => sampleInvoice({ track: 'income' }),
-        'income-credit-note': () => sampleCreditNote({ ...original, payable: 24 }, { track: 'income', reason: 'ارجاع فاتورة دخل' }),
-      };
-      const build = templates[positionals[0] ?? ''];
-      if (!build) {
-        console.error(`template: expected one of ${Object.keys(templates).join(', ')}.`);
+      const name = positionals[0] ?? '';
+      if (!Object.hasOwn(TEMPLATES, name)) {
+        console.error(`template: expected one of ${Object.keys(TEMPLATES).join(', ')}.`);
         return 2;
       }
-      const xml = build();
+      const xml = TEMPLATES[name as TemplateName]();
       console.log(values.body ? toRequestBody(xml) : xml);
       return 0;
+    }
+    case 'mcp': {
+      // stdout is the MCP protocol channel: nothing else may be printed in this mode.
+      const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+      await serveMcpStdio(version);
+      return new Promise(() => {});
     }
     case 'rules': {
       const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean' } } });

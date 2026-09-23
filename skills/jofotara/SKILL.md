@@ -25,6 +25,9 @@ npx jofotara-kit rules                     # every rule: id, severity, confidenc
 npx jofotara-kit serve --port 8080         # local mock of POST /core/invoices/
 ```
 
+If the `jofotara` MCP server is connected, prefer its tools (`validate_invoice`, `get_template`,
+`list_rules`, `explain_rule`) over shelling out — same engine.
+
 Workflow when implementing or fixing an integration:
 
 1. Run `template invoice` and `template credit-note`. Treat their element order, attributes

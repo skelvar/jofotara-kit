@@ -213,5 +213,17 @@ export const sampleInvoice = (o: SampleOptions = {}) => build(o);
 export const sampleCreditNote = (original: OriginalInvoice, o: CreditNoteOptions = {}) =>
   build(o, { original, reason: o.reason ?? 'ارجاع فاتورة' });
 
+const SAMPLE_ORIGINAL = { id: 'INV-001', uuid: '00000000-0000-4000-8000-000000000000' };
+
+/** Named samples exposed by the CLI and the MCP server. */
+export const TEMPLATES = {
+  invoice: () => sampleInvoice(),
+  'credit-note': () => sampleCreditNote({ ...SAMPLE_ORIGINAL, payable: 27.04 }),
+  'income-invoice': () => sampleInvoice({ track: 'income' }),
+  'income-credit-note': () => sampleCreditNote({ ...SAMPLE_ORIGINAL, payable: 24 }, { track: 'income', reason: 'ارجاع فاتورة دخل' }),
+} satisfies Record<string, () => string>;
+
+export type TemplateName = keyof typeof TEMPLATES;
+
 /** Wrap XML in the JoFotara request body: `{"invoice": "<base64>"}`. */
 export const toRequestBody = (xml: string) => JSON.stringify({ invoice: Buffer.from(xml, 'utf8').toString('base64') });
