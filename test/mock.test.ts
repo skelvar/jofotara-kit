@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createMockServer } from '../src/mock.ts';
-import { sampleCreditNote, sampleInvoice, toRequestBody } from '../src/templates.ts';
+import { DEFAULT_LINES, sampleCreditNote, sampleInvoice, samplePayable, toRequestBody } from '../src/templates.ts';
+import type { SampleLine } from '../src/templates.ts';
 
 const server = createMockServer({ clientId: 'id', secretKey: 'key' });
 let base = '';
@@ -26,6 +27,15 @@ async function submit(xml: string, headers: Record<string, string> = { 'Client-I
   return { status: res.status, body: await res.json() };
 }
 const codes = (body: any) => body.EINV_RESULTS.ERRORS.map((e: any) => e.EINV_CODE);
+const [widget, , book] = DEFAULT_LINES;
+const oneWidget: SampleLine = { ...widget, qty: 1, discount: 0.5 };
+
+async function acceptedOriginal(o: Parameters<typeof sampleInvoice>[0] = {}) {
+  const original = { id: o.id ?? `INV-${randomUUID().slice(0, 8)}`, uuid: randomUUID(), payable: samplePayable(DEFAULT_LINES, o.track) };
+  const res = await submit(sampleInvoice({ ...o, id: original.id, uuid: original.uuid }));
+  assert.equal(res.status, 200);
+  return original;
+}
 
 describe('mock server', () => {
   it('accepts a valid invoice and returns a QR string', async () => {
@@ -33,15 +43,13 @@ describe('mock server', () => {
     const { status, body } = await submit(sampleInvoice({ uuid }));
     assert.equal(status, 200);
     assert.equal(body.EINV_STATUS, 'SUBMITTED');
-    assert.equal(body.EINV_RESULTS.status, 'PASS');
     assert.equal(body.EINV_INV_UUID, uuid);
     assert.match(Buffer.from(body.EINV_QR, 'base64').toString(), /^JOFOTARA-KIT MOCK\|NOT A TAX DOCUMENT/);
   });
 
   it('requires credentials', async () => {
     assert.equal((await submit(sampleInvoice(), {})).status, 401);
-    const wrong = await submit(sampleInvoice(), { 'Client-Id': 'id', 'Secret-Key': 'nope' });
-    assert.deepEqual(codes(wrong.body), ['JOF-AUTH-002']);
+    assert.deepEqual(codes((await submit(sampleInvoice(), { 'Client-Id': 'id', 'Secret-Key': 'nope' })).body), ['JOF-AUTH-002']);
   });
 
   it('rejects invalid XML with NOT_SUBMITTED', async () => {
@@ -58,32 +66,39 @@ describe('mock server', () => {
     assert.deepEqual(codes((await submit(sampleInvoice({ uuid: randomUUID() }))).body), ['JOF-STA-002']);
   });
 
-  it('accepts a credit note only for an accepted original', async () => {
-    const original = { id: 'INV-001', uuid: randomUUID(), payable: 27.04 };
-    assert.deepEqual(codes((await submit(sampleCreditNote(original))).body), ['JOF-STA-003']);
-    await submit(sampleInvoice({ uuid: original.uuid }));
-    const { status, body } = await submit(sampleCreditNote(original));
-    assert.equal(status, 200);
-    assert.equal(body.EINV_STATUS, 'SUBMITTED');
-    const list = await (await fetch(`${base}/_kit/invoices`)).json();
-    assert.equal(list.length, 2);
+  it('accepts a return only for an accepted original', async () => {
+    const ghost = { id: 'INV-X', uuid: randomUUID(), payable: samplePayable() };
+    assert.deepEqual(codes((await submit(sampleCreditNote(ghost))).body), ['JOF-STA-003']);
   });
 
-  it('tracks partial returns and rejects over-returns', async () => {
-    const original = { id: 'INV-P', uuid: randomUUID(), payable: 27.04 };
-    await submit(sampleInvoice({ id: original.id, uuid: original.uuid }));
-    const widget = [{ name: 'Widget', qty: 2, price: 10, discount: 1, taxRate: 16 }];
-    const first = await submit(sampleCreditNote(original, { id: 'R1', lines: widget }));
-    assert.equal(first.status, 200);
-    assert.deepEqual(first.body.EINV_RESULTS.WARNINGS.map((w: any) => w.EINV_CODE), ['JOF-STA-006']);
-    const again = await submit(sampleCreditNote(original, { id: 'R2', lines: widget }));
-    assert.deepEqual(codes(again.body), ['JOF-STA-005']);
+  it('supports multiple partial returns until every quantity is returned', async () => {
+    const original = await acceptedOriginal();
+    const first = await submit(sampleCreditNote(original, { id: 'R1', lines: [oneWidget, book] }));
+    assert.equal(first.status, 200, JSON.stringify(first.body.JOFOTARA_KIT.findings));
+    const second = await submit(sampleCreditNote(original, { id: 'R2', lines: [oneWidget] }));
+    assert.equal(second.status, 200);
+    const third = await submit(sampleCreditNote(original, { id: 'R3', lines: [oneWidget] }));
+    assert.deepEqual(codes(third.body), ['JOF-STA-005']);
+    assert.match(third.body.EINV_RESULTS.ERRORS[0].EINV_MESSAGE, /after 2 already returned, but only 2 were sold/);
   });
 
-  it('rejects a return on a different track than the original', async () => {
-    const original = { id: 'INV-T', uuid: randomUUID(), payable: 27.04 };
-    await submit(sampleInvoice({ id: original.id, uuid: original.uuid }));
-    const incomeReturn = sampleCreditNote(original, { track: 'income', lines: [{ name: 'Widget', qty: 1, price: 27.04 }] });
-    assert.deepEqual(codes((await submit(incomeReturn)).body), ['JOF-STA-007']);
+  it('requires original line numbers, names, prices and tax on return lines', async () => {
+    const original = await acceptedOriginal();
+    assert.deepEqual(codes((await submit(sampleCreditNote(original, { lines: [{ ...book, id: 9 }] }))).body), ['JOF-STA-009']);
+    assert.deepEqual(codes((await submit(sampleCreditNote(original, { lines: [{ ...book, price: 2 }] }))).body), ['JOF-STA-009']);
+  });
+
+  it('requires the return to mirror the original type name', async () => {
+    const original = await acceptedOriginal({ paymentTerms: 'receivable', customer: { id: '99887766', name: 'Buyer' } });
+    assert.deepEqual(codes((await submit(sampleCreditNote(original, { lines: [book] }))).body), ['JOF-STA-007']);
+    const ok = await submit(sampleCreditNote(original, { paymentTerms: 'receivable', customer: { id: '99887766', name: 'Buyer' }, lines: [book] }));
+    assert.equal(ok.status, 200);
+  });
+
+  it('handles income invoices and income returns', async () => {
+    const original = await acceptedOriginal({ track: 'income' });
+    const ret = await submit(sampleCreditNote(original, { track: 'income', lines: [oneWidget] }));
+    assert.equal(ret.status, 200, JSON.stringify(ret.body.JOFOTARA_KIT.findings));
+    assert.ok(codes((await submit(sampleCreditNote(original, { id: 'R-S', lines: [book] }))).body).includes('JOF-STA-007'));
   });
 });

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
-import { EPS, decodeEnvelope, finding, report, validateXml } from './validate.ts';
+import { EPS, decodeEnvelope, finding, near, report, validateXml } from './validate.ts';
 import type { Finding, InvoiceSummary } from './validate.ts';
 
 export interface MockOptions {
@@ -46,7 +46,7 @@ export function createMockServer(opts: MockOptions = {}): Server {
 
   function stateChecks(s: InvoiceSummary): Finding[] {
     const out: Finding[] = [];
-    if (accepted.has(s.uuid)) out.push(finding('JOF-STA-001', `UUID ${s.uuid} was already accepted.`));
+    if (accepted.has(s.uuid)) out.push(finding('JOF-STA-001', `Document "${s.id}" / ${s.uuid} was already accepted.`));
     const sameNumber = [...accepted.values()].find((x) => x.id === s.id && x.uuid !== s.uuid);
     if (sameNumber) out.push(finding('JOF-STA-002', `Invoice number "${s.id}" was already accepted with UUID ${sameNumber.uuid}.`));
     const ref = s.billingReference;
@@ -56,19 +56,36 @@ export function createMockServer(opts: MockOptions = {}): Server {
       out.push(finding('JOF-STA-003', `BillingReference UUID ${ref.uuid} is not an invoice accepted by this mock.`));
       return out;
     }
-    if (orig.id !== ref.id || !(Math.abs(orig.payable - ref.total) <= EPS)) {
-      out.push(finding('JOF-STA-004', `Original is "${orig.id}" / ${orig.payable.toFixed(9)}; reference says "${ref.id}" / ${ref.total}.`));
+    if (orig.id !== ref.id || !near(orig.payable, ref.total)) {
+      out.push(finding('JOF-STA-004', `Original is "${orig.id}" / ${orig.payable}; reference says "${ref.id}" / ${ref.total}.`));
     }
-    if (orig.track !== s.track) {
-      out.push(finding('JOF-STA-007', `Original "${orig.id}" is ${orig.track} (name="${orig.typeName}"); this return is ${s.track} (name="${s.typeName}").`));
+    if (orig.typeName !== s.typeName) {
+      out.push(finding('JOF-STA-007', `Original "${orig.id}" is name="${orig.typeName}"; this return is name="${s.typeName}".`));
     }
     if (s.issueDate < orig.issueDate) out.push(finding('JOF-STA-008', `Return dated ${s.issueDate}, original dated ${orig.issueDate}.`));
-    const returned = [...accepted.values()].filter((x) => x.billingReference?.uuid === ref.uuid).reduce((t, x) => t + x.payable, 0);
-    const total = returned + s.payable;
-    if (total > orig.payable + EPS) {
-      out.push(finding('JOF-STA-005', `Returns would total ${total.toFixed(9)} against an original of ${orig.payable.toFixed(9)} (${returned.toFixed(9)} already returned).`));
-    } else if (total < orig.payable - EPS || returned > 0) {
-      out.push(finding('JOF-STA-006', `Returning ${s.payable.toFixed(9)} of ${orig.payable.toFixed(9)}; ${(orig.payable - total).toFixed(9)} remains returnable.`));
+
+    const priorReturns = [...accepted.values()].filter((x) => x.billingReference?.uuid === ref.uuid);
+    for (const line of s.lines) {
+      const o = orig.lines.find((l) => l.id === line.id);
+      if (!o) {
+        out.push(finding('JOF-STA-009', `Return line ${line.id} ("${line.name}") has no line ${line.id} on the original invoice.`));
+        continue;
+      }
+      const diffs = [
+        o.name !== line.name && `name "${line.name}" vs "${o.name}"`,
+        !near(o.price, line.price) && `price ${line.price} vs ${o.price}`,
+        (o.category !== line.category || o.rate !== line.rate) && `tax ${line.category} ${line.rate}% vs ${o.category} ${o.rate}%`,
+      ].filter(Boolean);
+      if (diffs.length) out.push(finding('JOF-STA-009', `Return line ${line.id}: ${diffs.join(', ')} (original values required).`));
+      const before = priorReturns.flatMap((r) => r.lines).filter((l) => l.id === line.id).reduce((t, l) => t + l.quantity, 0);
+      if (before + line.quantity > o.quantity + 1e-9) {
+        out.push(finding('JOF-STA-005', `Line ${line.id} ("${o.name}"): returning ${line.quantity} after ${before} already returned, but only ${o.quantity} were sold.`));
+      }
+    }
+    const returned = priorReturns.reduce((t, x) => t + x.payable, 0);
+    const lineOverReturn = out.some((f) => f.rule === 'JOF-STA-005');
+    if (!lineOverReturn && returned + s.payable > orig.payable + EPS) {
+      out.push(finding('JOF-STA-005', `Returns would total ${returned + s.payable} against an original total of ${orig.payable} (${returned} already returned).`));
     }
     return out;
   }

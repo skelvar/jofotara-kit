@@ -1,25 +1,39 @@
 import { randomUUID } from 'node:crypto';
 
 export interface SampleLine {
+  /** Line number. On returns, use the line number of the original invoice (manual p.29). */
+  id?: number;
   name: string;
   qty: number;
   price: number;
   discount?: number;
-  /** VAT percent, e.g. 16. Omit or 0 for zero-rated. */
+  /** VAT percent (sales only): 1, 2, 3, 4, 5, 7, 8, 10 or 16 → S; 0 → O (zero-rated). */
   taxRate?: number;
+  /** Exempt line (sales only) → category Z at 0%. */
+  exempt?: boolean;
+}
+
+export interface SampleBuyer {
+  scheme?: 'NIN' | 'PN' | 'TN';
+  id: string;
+  name?: string;
+  phone?: string;
+  postalZone?: string;
+  /** Governorate code, e.g. JO-AM (sales documents only). */
+  city?: string;
 }
 
 export interface SampleOptions {
-  /** sales (default): VAT document, name 012/022. income: name 011, no TaxTotal anywhere. */
+  /** sales (default): VAT document 012/022. income: 011/021, no TaxTotal anywhere. */
   track?: 'sales' | 'income';
+  paymentTerms?: 'cash' | 'receivable';
   id?: string;
   uuid?: string;
   issueDate?: string;
   icv?: number;
-  typeName?: '012' | '022';
   note?: string;
   seller?: { taxNumber: string; name: string; tsp: string };
-  customer?: { id: string; name: string };
+  customer?: SampleBuyer;
   lines?: SampleLine[];
 }
 
@@ -34,87 +48,134 @@ export interface OriginalInvoice {
 }
 
 const DEFAULT_SELLER = { taxNumber: '12345678', name: 'Example Trading LLC', tsp: '1234567' };
-const WALK_IN = { id: '-', name: 'Cash customer' };
-const DEFAULT_LINES: SampleLine[] = [
-  { name: 'Widget', qty: 2, price: 10, discount: 1, taxRate: 16 },
-  { name: 'Book', qty: 1, price: 5 },
+// The manual documents no anonymous-buyer value; TN/0 is a common convention for walk-in customers.
+const WALK_IN: SampleBuyer = { scheme: 'TN', id: '0', name: 'Cash customer' };
+export const DEFAULT_LINES: SampleLine[] = [
+  { id: 1, name: 'Widget', qty: 2, price: 10, discount: 1, taxRate: 16 },
+  { id: 2, name: 'Bread', qty: 1, price: 5, exempt: true },
+  { id: 3, name: 'Book', qty: 1, price: 3, taxRate: 0 },
 ];
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
-const amt = (n: number) => `currencyID="JO">${n.toFixed(9)}`;
-const round3 = (n: number) => Math.round(n * 1000) / 1000;
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const d3 = (n: number) => r3(n).toFixed(3);
+const jo = (tag: string, n: number) => `<cbc:${tag} currencyID="JO">${d3(n)}</cbc:${tag}>`;
+const pct = (n: number) => String(r3(n));
 
-/** Line math that produces live-API-accepted totals. */
-export function computeLines(lines: SampleLine[]) {
-  return lines.map((l) => {
-    const gross = l.qty * l.price;
-    const discount = l.discount ?? 0;
-    const ext = Math.max(gross - discount, 0);
-    const tax = round3((ext * (l.taxRate ?? 0)) / 100);
-    return { ...l, gross, discount, ext, tax, net: ext + tax };
+/** Line math from the manual: amount = qty × price − discount; VAT = amount × rate (fils-rounded). */
+export function computeLines(lines: SampleLine[], track: 'sales' | 'income' = 'sales') {
+  return lines.map((l, i) => {
+    const gross = r3(l.qty * l.price);
+    const discount = r3(l.discount ?? 0);
+    const ext = r3(gross - discount);
+    const rate = track === 'income' || l.exempt ? 0 : l.taxRate ?? 0;
+    const tax = r3((ext * rate) / 100);
+    const category = track === 'income' ? '' : l.exempt ? 'Z' : rate > 0 ? 'S' : 'O';
+    return { ...l, id: l.id ?? i + 1, gross, discount, ext, rate, tax, category, net: r3(ext + tax) };
   });
 }
 
-function build(o: SampleOptions, credit?: { original: OriginalInvoice; reason: string }): string {
-  const income = o.track === 'income';
-  const seller = o.seller ?? DEFAULT_SELLER;
-  const customer = o.customer ?? WALK_IN;
-  const lines = computeLines((o.lines ?? DEFAULT_LINES).map((l) => (income ? { ...l, taxRate: 0 } : l)));
-  const total = (k: 'gross' | 'discount' | 'tax' | 'net') => lines.reduce((s, l) => s + l[k], 0);
-  const gross = total('gross'), discount = total('discount'), tax = total('tax'), payable = total('net');
-  const typeCode = credit ? '381' : '388';
-  const typeName = income ? '011' : credit ? '012' : (o.typeName ?? '012');
-  const note = o.note ?? (credit ? credit.reason : '');
+type Line = ReturnType<typeof computeLines>[number];
 
-  const billing = credit
-    ? `
-  <cac:BillingReference>
-    <cac:InvoiceDocumentReference>
-      <cbc:ID>${esc(credit.original.id)}</cbc:ID>
-      <cbc:UUID>${esc(credit.original.uuid)}</cbc:UUID>
-      <cbc:DocumentDescription>${credit.original.payable.toFixed(9)}</cbc:DocumentDescription>
-    </cac:InvoiceDocumentReference>
-  </cac:BillingReference>`
-    : '';
-
-  const invoiceLines = lines
-    .map((l, i) => {
-      const percent = l.ext > 0 && l.tax > 0 ? ((l.tax / l.ext) * 100).toFixed(2) : '0.00';
-      const lineTax = income ? '' : `
+function renderLine(l: Line, sales: boolean, salesReturn: boolean) {
+  const taxTotal = sales ? `
     <cac:TaxTotal>
-      <cbc:TaxAmount ${amt(l.tax)}</cbc:TaxAmount>
-      <cbc:RoundingAmount ${amt(l.net)}</cbc:RoundingAmount>
-      <cac:TaxSubtotal>
-        <cbc:TaxAmount ${amt(l.tax)}</cbc:TaxAmount>
+      ${jo('TaxAmount', l.tax)}
+      ${jo('RoundingAmount', l.net)}
+      <cac:TaxSubtotal>${salesReturn ? `
+        ${jo('TaxableAmount', l.ext)}` : ''}
+        ${jo('TaxAmount', l.tax)}
         <cac:TaxCategory>
-          <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5305">${l.tax > 0 ? 'S' : 'Z'}</cbc:ID>
-          <cbc:Percent>${percent}</cbc:Percent>
+          <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5305">${l.category}</cbc:ID>
+          <cbc:Percent>${pct(l.rate)}</cbc:Percent>
           <cac:TaxScheme>
             <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5153">VAT</cbc:ID>
           </cac:TaxScheme>
         </cac:TaxCategory>
       </cac:TaxSubtotal>
-    </cac:TaxTotal>`;
-      return `
+    </cac:TaxTotal>` : '';
+  return `
   <cac:InvoiceLine>
-    <cbc:ID>${i + 1}</cbc:ID>
-    <cbc:InvoicedQuantity unitCode="PCE">${l.qty.toFixed(2)}</cbc:InvoicedQuantity>
-    <cbc:LineExtensionAmount ${amt(l.ext)}</cbc:LineExtensionAmount>${lineTax}
+    <cbc:ID>${l.id}</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="PCE">${d3(l.qty)}</cbc:InvoicedQuantity>
+    ${jo('LineExtensionAmount', l.ext)}${taxTotal}
     <cac:Item>
       <cbc:Name>${esc(l.name)}</cbc:Name>
     </cac:Item>
     <cac:Price>
-      <cbc:PriceAmount ${amt(l.price)}</cbc:PriceAmount>
+      ${jo('PriceAmount', l.price)}${salesReturn ? `
+      <cbc:BaseQuantity unitCode="C62">1</cbc:BaseQuantity>` : ''}
       <cac:AllowanceCharge>
         <cbc:ChargeIndicator>false</cbc:ChargeIndicator>
         <cbc:AllowanceChargeReason>DISCOUNT</cbc:AllowanceChargeReason>
-        <cbc:Amount ${amt(l.discount)}</cbc:Amount>
+        ${jo('Amount', l.discount)}
       </cac:AllowanceCharge>
     </cac:Price>
   </cac:InvoiceLine>`;
-    })
-    .join('');
+}
+
+function renderBuyer(b: SampleBuyer, sales: boolean) {
+  const address = [
+    b.postalZone && `<cbc:PostalZone>${esc(b.postalZone)}</cbc:PostalZone>`,
+    sales && b.city && `<cbc:CountrySubentityCode>${esc(b.city)}</cbc:CountrySubentityCode>`,
+  ].filter(Boolean).map((x) => `\n        ${x}`).join('');
+  return `
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyIdentification>
+        <cbc:ID schemeID="${b.scheme ?? 'TN'}">${esc(b.id)}</cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PostalAddress>${address}
+        <cac:Country>
+          <cbc:IdentificationCode>JO</cbc:IdentificationCode>
+        </cac:Country>
+      </cac:PostalAddress>
+      <cac:PartyTaxScheme>${sales ? `
+        <cbc:CompanyID>${esc(b.id)}</cbc:CompanyID>` : ''}
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>${b.name ? `
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName>${esc(b.name)}</cbc:RegistrationName>
+      </cac:PartyLegalEntity>` : ''}
+    </cac:Party>${b.phone ? `
+    <cac:AccountingContact>
+      <cbc:Telephone>${esc(b.phone)}</cbc:Telephone>
+    </cac:AccountingContact>` : ''}
+  </cac:AccountingCustomerParty>`;
+}
+
+function build(o: SampleOptions, credit?: { original: OriginalInvoice; reason: string }): string {
+  const track = o.track ?? 'sales';
+  const sales = track === 'sales';
+  const salesReturn = sales && !!credit;
+  const seller = o.seller ?? DEFAULT_SELLER;
+  const lines = computeLines(o.lines ?? DEFAULT_LINES, track);
+  const total = (k: 'gross' | 'discount' | 'tax' | 'net') => r3(lines.reduce((s, l) => s + l[k], 0));
+  const gross = total('gross'), discount = total('discount'), tax = total('tax'), payable = total('net');
+  const typeName = `0${o.paymentTerms === 'receivable' ? 2 : 1}${sales ? 2 : 1}`;
+
+  const groups = new Map<string, { category: string; rate: number; taxable: number; tax: number }>();
+  for (const l of lines) {
+    const g = groups.get(`${l.category}:${l.rate}`) ?? { category: l.category, rate: l.rate, taxable: 0, tax: 0 };
+    g.taxable = r3(g.taxable + l.ext);
+    g.tax = r3(g.tax + l.tax);
+    groups.set(`${l.category}:${l.rate}`, g);
+  }
+  const docSubtotals = salesReturn ? [...groups.values()].map((g) => `
+    <cac:TaxSubtotal>
+      ${jo('TaxableAmount', g.taxable)}
+      ${jo('TaxAmount', g.tax)}
+      <cac:TaxCategory>
+        <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5305">${g.category}</cbc:ID>
+        <cbc:Percent>${pct(g.rate)}</cbc:Percent>
+        <cac:TaxScheme>
+          <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5153">VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:TaxCategory>
+    </cac:TaxSubtotal>`).join('') : '';
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -122,16 +183,23 @@ function build(o: SampleOptions, credit?: { original: OriginalInvoice; reason: s
          xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
          xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2">
   <cbc:ProfileID>reporting:1.0</cbc:ProfileID>
-  <cbc:ID>${esc(o.id ?? (credit ? `R_${credit.original.id}` : 'INV-001'))}</cbc:ID>
+  <cbc:ID>${esc(o.id ?? (credit ? `R1-${credit.original.id}` : 'INV-001'))}</cbc:ID>
   <cbc:UUID>${esc(o.uuid ?? randomUUID())}</cbc:UUID>
   <cbc:IssueDate>${esc(o.issueDate ?? new Date().toISOString().slice(0, 10))}</cbc:IssueDate>
-  <cbc:InvoiceTypeCode name="${typeName}">${typeCode}</cbc:InvoiceTypeCode>
-  <cbc:Note>${esc(note)}</cbc:Note>
+  <cbc:InvoiceTypeCode name="${typeName}">${credit ? '381' : '388'}</cbc:InvoiceTypeCode>
+  <cbc:Note>${esc(o.note ?? '')}</cbc:Note>
   <cbc:DocumentCurrencyCode>JOD</cbc:DocumentCurrencyCode>
-  <cbc:TaxCurrencyCode>JOD</cbc:TaxCurrencyCode>${billing}
+  <cbc:TaxCurrencyCode>JOD</cbc:TaxCurrencyCode>${credit ? `
+  <cac:BillingReference>
+    <cac:InvoiceDocumentReference>
+      <cbc:ID>${esc(credit.original.id)}</cbc:ID>
+      <cbc:UUID>${esc(credit.original.uuid)}</cbc:UUID>
+      <cbc:DocumentDescription>${d3(credit.original.payable)}</cbc:DocumentDescription>
+    </cac:InvoiceDocumentReference>
+  </cac:BillingReference>` : ''}
   <cac:AdditionalDocumentReference>
     <cbc:ID>ICV</cbc:ID>
-    <cbc:UUID>${o.icv ?? 1}</cbc:UUID>
+    <cbc:UUID>${o.icv ?? (credit ? 2 : 1)}</cbc:UUID>
   </cac:AdditionalDocumentReference>
   <cac:AccountingSupplierParty>
     <cac:Party>
@@ -150,77 +218,62 @@ function build(o: SampleOptions, credit?: { original: OriginalInvoice; reason: s
         <cbc:RegistrationName>${esc(seller.name)}</cbc:RegistrationName>
       </cac:PartyLegalEntity>
     </cac:Party>
-  </cac:AccountingSupplierParty>
-  <cac:AccountingCustomerParty>
-    <cac:Party>
-      <cac:PartyIdentification>
-        <cbc:ID schemeID="TN">${esc(customer.id)}</cbc:ID>
-      </cac:PartyIdentification>
-      <cac:PostalAddress>
-        <cbc:PostalZone/>
-        <cbc:CountrySubentityCode/>
-        <cac:Country>
-          <cbc:IdentificationCode>JO</cbc:IdentificationCode>
-        </cac:Country>
-      </cac:PostalAddress>
-      <cac:PartyTaxScheme>
-        <cbc:CompanyID>${esc(customer.id)}</cbc:CompanyID>
-        <cac:TaxScheme>
-          <cbc:ID>VAT</cbc:ID>
-        </cac:TaxScheme>
-      </cac:PartyTaxScheme>
-      <cac:PartyLegalEntity>
-        <cbc:RegistrationName>${esc(customer.name)}</cbc:RegistrationName>
-      </cac:PartyLegalEntity>
-    </cac:Party>
-    <cac:AccountingContact>
-      <cbc:Telephone/>
-    </cac:AccountingContact>
-  </cac:AccountingCustomerParty>
+  </cac:AccountingSupplierParty>${renderBuyer(o.customer ?? WALK_IN, sales)}
   <cac:SellerSupplierParty>
     <cac:Party>
       <cac:PartyIdentification>
         <cbc:ID>${esc(seller.tsp)}</cbc:ID>
       </cac:PartyIdentification>
     </cac:Party>
-  </cac:SellerSupplierParty>
+  </cac:SellerSupplierParty>${credit ? `
   <cac:PaymentMeans>
-    <cbc:PaymentMeansCode listID="UN/ECE 4461">10</cbc:PaymentMeansCode>${credit ? `
-    <cbc:InstructionNote>${esc(credit.reason)}</cbc:InstructionNote>` : ''}
-  </cac:PaymentMeans>
+    <cbc:PaymentMeansCode listID="UN/ECE 4461">10</cbc:PaymentMeansCode>
+    <cbc:InstructionNote>${esc(credit.reason)}</cbc:InstructionNote>
+  </cac:PaymentMeans>` : ''}
   <cac:AllowanceCharge>
     <cbc:ChargeIndicator>false</cbc:ChargeIndicator>
     <cbc:AllowanceChargeReason>discount</cbc:AllowanceChargeReason>
-    <cbc:Amount ${amt(discount)}</cbc:Amount>
-  </cac:AllowanceCharge>${income ? '' : `
+    ${jo('Amount', discount)}
+  </cac:AllowanceCharge>${sales ? `
   <cac:TaxTotal>
-    <cbc:TaxAmount ${amt(tax)}</cbc:TaxAmount>
-  </cac:TaxTotal>`}
+    ${jo('TaxAmount', tax)}${docSubtotals}
+  </cac:TaxTotal>` : ''}
   <cac:LegalMonetaryTotal>
-    <cbc:TaxExclusiveAmount ${amt(gross)}</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount ${amt(credit ? payable : gross - discount + tax)}</cbc:TaxInclusiveAmount>
-    <cbc:AllowanceTotalAmount ${amt(discount)}</cbc:AllowanceTotalAmount>
-    <cbc:PayableAmount ${amt(payable)}</cbc:PayableAmount>
-  </cac:LegalMonetaryTotal>${invoiceLines}
+    ${jo('TaxExclusiveAmount', gross)}
+    ${jo('TaxInclusiveAmount', payable)}
+    ${jo('AllowanceTotalAmount', discount)}${salesReturn ? `
+    <cbc:PrepaidAmount currencyID="JO">0</cbc:PrepaidAmount>` : ''}
+    ${jo('PayableAmount', payable)}
+  </cac:LegalMonetaryTotal>${lines.map((l) => renderLine(l, sales, salesReturn)).join('')}
 </Invoice>
 `;
 }
 
-/** A sales invoice (388) in the exact shape accepted by the live JoFotara API. */
+/** A new invoice (388) in the shape documented by the ISTD manual. */
 export const sampleInvoice = (o: SampleOptions = {}) => build(o);
 
-/** A full-return credit note (381) for `original`, in the live-API-accepted shape. */
+/** A return (381) against `original`. Pass only the returned lines, with their original line numbers. */
 export const sampleCreditNote = (original: OriginalInvoice, o: CreditNoteOptions = {}) =>
   build(o, { original, reason: o.reason ?? 'ارجاع فاتورة' });
 
+/** Payable total of a sample built from these lines. */
+export const samplePayable = (lines: SampleLine[] = DEFAULT_LINES, track: 'sales' | 'income' = 'sales') =>
+  r3(computeLines(lines, track).reduce((s, l) => s + l.net, 0));
+
 const SAMPLE_ORIGINAL = { id: 'INV-001', uuid: '00000000-0000-4000-8000-000000000000' };
+// A partial return: one of the two widgets, and the book — original line numbers 1 and 3.
+const PARTIAL_RETURN: SampleLine[] = [
+  { id: 1, name: 'Widget', qty: 1, price: 10, discount: 0.5, taxRate: 16 },
+  { id: 3, name: 'Book', qty: 1, price: 3, taxRate: 0 },
+];
 
 /** Named samples exposed by the CLI and the MCP server. */
 export const TEMPLATES = {
   invoice: () => sampleInvoice(),
-  'credit-note': () => sampleCreditNote({ ...SAMPLE_ORIGINAL, payable: 27.04 }),
+  'credit-note': () => sampleCreditNote({ ...SAMPLE_ORIGINAL, payable: samplePayable() }, { lines: PARTIAL_RETURN }),
   'income-invoice': () => sampleInvoice({ track: 'income' }),
-  'income-credit-note': () => sampleCreditNote({ ...SAMPLE_ORIGINAL, payable: 24 }, { track: 'income', reason: 'ارجاع فاتورة دخل' }),
+  'income-credit-note': () =>
+    sampleCreditNote({ ...SAMPLE_ORIGINAL, payable: samplePayable(DEFAULT_LINES, 'income') }, { track: 'income', lines: PARTIAL_RETURN, reason: 'ارجاع فاتورة دخل' }),
 } satisfies Record<string, () => string>;
 
 export type TemplateName = keyof typeof TEMPLATES;
