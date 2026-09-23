@@ -16,8 +16,8 @@ use the local tooling below.
 ## Tooling — use it, don't guess
 
 ```bash
-npx jofotara-kit template invoice          # production-shaped sample 388 invoice XML
-npx jofotara-kit template credit-note      # production-shaped sample 381 return XML
+npx jofotara-kit template invoice          # live-accepted sample 388 invoice XML
+npx jofotara-kit template credit-note      # live-accepted sample 381 return XML
 npx jofotara-kit template income-invoice   # 388/011 income document (no VAT)
 npx jofotara-kit template income-credit-note
 npx jofotara-kit validate out/*.xml        # lint generated XML (also accepts {"invoice": base64} bodies)

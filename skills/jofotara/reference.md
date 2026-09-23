@@ -1,8 +1,8 @@
 # JoFotara integration — reference
 
-Distilled from a production integration whose output was accepted by the live JoFotara API.
-Scope: one seller, sales invoices (فاتورة مبيعات) and their credit notes (إشعار دائن).
-Income receipts/vouchers are a different document family and are out of scope.
+Rules marked `verified` reflect XML shapes accepted by the live JoFotara API.
+Scope: one seller; sales invoices (فاتورة مبيعات), income invoices (فاتورة دخل), and their
+credit notes (إشعار دائن), in JOD.
 
 XML element names, attribute values and code lists are **fixed by JoFotara**. Your own
 database/field names are yours — only the XML contract matters.
@@ -63,7 +63,7 @@ The TSP is shown in the portal next to the Client-Id / Secret-Key.
 |---|---|---|
 | Sales invoice, cash (نقدية) | `388` | `012` |
 | Sales invoice, receivable (ذمم) | `388` | `022` |
-| Sales credit note (return) | `381` | `012` (production never sent `022` on a return) |
+| Sales credit note (return) | `381` | `012` (a `022` name on a return has not been observed accepted) |
 | Income invoice (فاتورة دخل) | `388` | `011` |
 | Income credit note | `381` | `011` |
 

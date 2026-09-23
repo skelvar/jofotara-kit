@@ -6,8 +6,8 @@ JoFotara (فوترة, Jordan's ISTD e-invoicing system) has no test environment.
 see if your XML is right is to send a real invoice with real credentials and create a real
 tax record. `jofotara-kit` lets you get the shape right locally first:
 
-- **`validate`** — lints JoFotara UBL 2.1 XML against rules learned from a production
-  integration: 9-decimal amounts, `currencyID="JO"`, numeric ICV, type codes, totals math,
+- **`validate`** — lints JoFotara UBL 2.1 XML against rules learned from documents accepted by the
+  live API: 9-decimal amounts, `currencyID="JO"`, numeric ICV, type codes, totals math,
   credit-note references, element order, and more. Every finding says how to fix it.
 - **`serve`** — a local mock of `POST /core/invoices/`: same path, same `Client-Id` /
   `Secret-Key` headers, same `{"invoice": base64}` body, `EINV_STATUS` / `EINV_RESULTS` /
@@ -82,7 +82,7 @@ JoFotara publishes no validator, so every rule states where it comes from:
 
 | Confidence | Meaning |
 |---|---|
-| `verified` | The passing shape/value was accepted by the live API in production. |
+| `verified` | The passing shape/value has been accepted by the live API. |
 | `reported` | Documented by other integrators or SDKs, not observed first-hand. |
 | `inferred` | Follows from UBL 2.1 or common sense; not confirmed against the live API. |
 

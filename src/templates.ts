@@ -45,7 +45,7 @@ const esc = (s: string) =>
 const amt = (n: number) => `currencyID="JO">${n.toFixed(9)}`;
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
-/** Line math exactly as the production-accepted integration computes it. */
+/** Line math that produces live-API-accepted totals. */
 export function computeLines(lines: SampleLine[]) {
   return lines.map((l) => {
     const gross = l.qty * l.price;
@@ -209,7 +209,7 @@ function build(o: SampleOptions, credit?: { original: OriginalInvoice; reason: s
 /** A sales invoice (388) in the exact shape accepted by the live JoFotara API. */
 export const sampleInvoice = (o: SampleOptions = {}) => build(o);
 
-/** A full-return credit note (381) for `original`, in the production-accepted shape. */
+/** A full-return credit note (381) for `original`, in the live-API-accepted shape. */
 export const sampleCreditNote = (original: OriginalInvoice, o: CreditNoteOptions = {}) =>
   build(o, { original, reason: o.reason ?? 'ارجاع فاتورة' });
 

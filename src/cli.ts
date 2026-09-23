@@ -14,7 +14,7 @@ Usage:
   jofotara-kit serve [--port 8080] [--host 127.0.0.1] [--client-id ID] [--secret-key KEY] [--reject-status 400]
                                                Run a local mock of POST /core/invoices/
   jofotara-kit template <invoice|credit-note|income-invoice|income-credit-note> [--body]
-                                               Print a production-shaped sample (or its JSON request body)
+                                               Print a live-accepted sample (or its JSON request body)
   jofotara-kit rules [--json]                  List every rule with severity and confidence
 
 Exit codes: 0 ok, 1 validation errors, 2 usage error.
