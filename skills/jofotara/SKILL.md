@@ -1,96 +1,99 @@
 ---
 name: jofotara
-description: Use when building, reviewing or debugging an integration with JoFotara (فوترة / نظام الفوترة الوطني, Jordan ISTD e-invoicing) — generating UBL 2.1 invoice XML, POSTing to backend.jofotara.gov.jo/core/invoices/, Client-Id/Secret-Key auth, InvoiceTypeCode 388/381 with name 012/022, ICV, income source sequence (TSP), EINV_STATUS/EINV_QR responses, credit notes/returns (full, partial, multiple), or diagnosing a JoFotara rejection. Sales (012/022) and income (011) invoices and their credit notes.
+description: Use when building, reviewing or debugging an integration with JoFotara (فوترة / نظام الفوترة الوطني, Jordan ISTD e-invoicing) — generating UBL 2.1 invoice XML, POSTing to backend.jofotara.gov.jo/core/invoices/, Client-Id/Secret-Key auth, InvoiceTypeCode 388/381 with names 011/021/012/022/013/023, tax categories S/Z/O, ICV, income source sequence, EINV_STATUS/EINV_QR responses, full/partial/multiple returns, or diagnosing a JoFotara rejection. Covers income, general sales and special sales documents.
 ---
 
 # JoFotara integration
 
-JoFotara is Jordan's mandatory e-invoicing platform (Income and Sales Tax Department, ISTD).
-Every invoice is a UBL 2.1 XML document, base64-encoded, sent in one HTTP POST. The API
-replies with a status and a QR string that must be printed on the invoice.
+JoFotara is Jordan's national e-invoicing system (Income and Sales Tax Department, ISTD).
+Every document is a UBL 2.1 `<Invoice>` XML, base64-encoded in one JSON POST. A successful
+response carries the official QR code that must be printed on the seller's invoice.
 
-**There is no government sandbox.** Every request to the real endpoint with real credentials
-creates a real tax record. Never send test invoices to production to "see what happens" —
-use the local tooling below.
+The source of truth is the ISTD **technical guide for the national e-invoicing API, v1.4
+(approved 2023-12-01)**. Every rule in the tooling below cites its page.
+
+**There is no government sandbox.** Every request with real credentials creates a real
+tax record. Never send test documents to production — use the local tooling.
 
 ## Tooling — use it, don't guess
 
 ```bash
-npx jofotara-kit template invoice          # live-accepted sample 388 invoice XML
-npx jofotara-kit template credit-note      # live-accepted sample 381 return XML
-npx jofotara-kit template income-invoice   # 388/011 income document (no VAT)
-npx jofotara-kit template income-credit-note
-npx jofotara-kit validate out/*.xml        # lint generated XML (also accepts {"invoice": base64} bodies)
-npx jofotara-kit rules                     # every rule: id, severity, confidence
-npx jofotara-kit serve --port 8080         # local mock of POST /core/invoices/
+npx jofotara-kit template invoice              # 388/012 sales invoice (S, Z and O lines)
+npx jofotara-kit template credit-note          # 381/012 partial sales return
+npx jofotara-kit template income-invoice       # 388/011 income invoice (no VAT)
+npx jofotara-kit template income-credit-note   # 381/011 partial income return
+npx jofotara-kit validate out/*.xml            # lint XML (also accepts {"invoice": base64} bodies)
+npx jofotara-kit rules                         # every rule with its manual page
+npx jofotara-kit serve --port 8080             # local mock of POST /core/invoices/
 ```
 
 If the `jofotara` MCP server is connected, prefer its tools (`validate_invoice`, `get_template`,
-`list_rules`, `explain_rule`) over shelling out — same engine.
+`list_rules`, `explain_rule`) — same engine.
 
-Workflow when implementing or fixing an integration:
+Workflow:
 
-1. Run `template invoice` and `template credit-note`. Treat their element order, attributes
-   and formatting as the contract. Only values change.
-2. Build the generator in the user's stack. Map their data model to the XML fields
-   (see [reference.md](reference.md) §3).
-3. **Validate every XML your code produces** with `jofotara-kit validate` before claiming it
-   works. Add it to the project's tests/CI. Fix every `error`; read every `warning`.
-4. Point the integration's base URL at `http://127.0.0.1:8080` (`jofotara-kit serve`) and run
-   the full flow: submit, parse response, store, print QR, submit a return.
-5. Only then switch the base URL to `https://backend.jofotara.gov.jo` — config only, no code change.
+1. Generate the matching template and treat its structure as the contract; only values change.
+2. Build the generator in the user's stack, mapping their data model to the fields in [reference.md](reference.md).
+3. **Validate every XML your code produces** (`jofotara-kit validate`) and add it to tests/CI. Fix every error.
+4. Point the base URL at `http://127.0.0.1:8080` (`jofotara-kit serve`) and run the full flow:
+   invoice → partial return → second return → over-return (must fail).
+5. Only then switch to `https://backend.jofotara.gov.jo` — config only.
 
-Each finding has a **confidence**: `verified` (observed against the live API), `reported`
-(other integrators/SDKs), `inferred` (UBL/common sense). Passing the kit means "passes known
-rules", not "guaranteed accepted". Say so to the user.
+Findings show `manual p.N` when the manual states the rule, `inferred` otherwise. The mock
+models the manual; it is not the government system. Say so to the user.
 
 ## Quick reference
 
-| Thing | Value |
+| Thing | Value (manual page) |
 |---|---|
-| Endpoint | `POST https://backend.jofotara.gov.jo/core/invoices/` |
-| Auth | headers `Client-Id`, `Secret-Key` (static, from the JoFotara portal). No OAuth, no token |
-| Body | `{"invoice": "<base64 of UTF-8 XML>"}`, `Content-Type: application/json` |
-| Timeout | 30 s. A timeout is **not** a rejection — the invoice may have landed |
-| Currency | `JOD` in DocumentCurrencyCode/TaxCurrencyCode, but `currencyID="JO"` on amounts |
-| Amounts | exactly 9 decimals (`toFixed(9)`); quantity & percent 2 decimals |
-| Sales invoice | `<cbc:InvoiceTypeCode name="012">388</…>` cash, `name="022"` receivable. Has `TaxTotal` (doc + every line) |
-| Income invoice | `name="011"`, **no `TaxTotal` anywhere**, Payable = Σ LineExtension. Separate credentials/TSP from sales |
-| Credit note | `381` + `<cac:BillingReference>` + reason in `PaymentMeans/InstructionNote`. Same track as the original: sales → `381/012`, income → `381/011` |
-| UUID | fresh random UUID v4 per submission in `<cbc:UUID>` |
-| ICV | **numeric** counter in `AdditionalDocumentReference[ID=ICV]/UUID` |
-| TSP | income source sequence (تسلسل مصدر الدخل) in `SellerSupplierParty/…/ID` |
-| Tax category | `S` + percent when VAT > 0, `Z` zero-rated, `E` exempt (unverified) |
-| Success | `EINV_STATUS` ~ `SUBMITTED/ACCEPT/PASS/SUCCESS` **and** no `EINV_RESULTS.ERRORS` |
-| QR | first string under any key matching `/qr/i` (usually `EINV_QR`), print verbatim |
+| Endpoint | `POST https://backend.jofotara.gov.jo/core/invoices/` (p.81) |
+| Auth | headers `Client-Id`, `Secret-Key` from the portal's device-linking screen (p.7, p.9) |
+| Body | `{"invoice": "<base64 of UTF-8 XML>"}` (p.81) |
+| Type code | `388` new, `381` return (p.11, p.23) |
+| Type name | `0` + payment (`1` cash, `2` receivable) + track (`1` income, `2` general sales, `3` special sales): 011, 021, 012, 022, 013, 023 |
+| Document key | `cbc:ID` + `cbc:UUID` together; never reuse (p.11) |
+| ICV | your own counter, 1, 2, 3 … (p.11) |
+| Currency | `JOD` in the two currency codes, `currencyID="JO"` on every amount |
+| Numbers | plain decimals; the manual fixes no decimal count (its samples use 0–3) |
+| Discount | per line only; spread order discounts over lines first (p.17, p.38) |
+| Tax categories | `S` at 1/2/3/4/5/7/8/10/16%, **`Z` = exempt**, **`O` = zero-rated**, both 0% (p.41) |
+| Buyer ID | digits with `schemeID` `NIN`, `PN` or `TN` (p.14) |
+| Buyer name | required for receivable invoices and cash invoices above 10,000 JOD (p.14) |
+| Income docs | no `TaxTotal` at all; payable = exclusive − discounts (p.17) |
+| QR | returned on success; print it on the invoice (p.81) |
+
+## Returns (381) — what the manual allows (p.22)
+
+- Returns are on **quantities** only, and may never exceed what was sold on the original.
+- **Several returns** against one invoice are allowed until every quantity is returned —
+  partial returns are the normal case, not an edge case.
+- Each return line uses the **original line number**, item name, unit price and tax category/rate (p.29).
+- `BillingReference` = original number, original UUID, original **total** (p.23).
+- Reason in `PaymentMeans/InstructionNote` (p.26).
+- Same type name as the original: 012 → 012, 022 → 022, 011 → 011, 021 → 021 (p.23, p.44).
+- **General-sales returns** additionally need (p.49–54): line `TaxableAmount`,
+  `<cbc:BaseQuantity unitCode="C62">1</cbc:BaseQuantity>`, one document `TaxSubtotal`
+  per category and rate, and `<cbc:PrepaidAmount currencyID="JO">0</cbc:PrepaidAmount>`.
+- Amounts stay positive; `381` carries the credit meaning.
 
 ## Non-negotiables
 
-- **Never log or commit `Secret-Key`.** Mask it in UIs (`ab****yz`). Read from env/config.
-- **Store the full raw response** and the submitted XML (or at least its UUID). It is the
-  only proof of acceptance and you need the UUID for credit notes.
-- **Idempotency:** never resubmit an accepted invoice. A resend mints a new UUID = a second
-  legal document. After a timeout, check before retrying.
-- **HTTP 200 is not success.** The body can still say `EINV_RESULTS.status = "ERROR"`.
-  Responses may also be plain text — `JSON.parse` inside try/catch and keep the raw text.
-- **Returns are new documents**, never edits or deletes. All amounts stay positive.
-- Keep a dry-run switch (build + save XML, don't POST) in the user's integration.
+- **Never log or commit `Secret-Key`.**
+- **Store the submitted XML, UUID and raw response per document.** Returns need the original UUID and total.
+- **Idempotency:** never resubmit an accepted document. A timeout or an unreadable response is
+  *unknown*, not rejected — verify before retrying.
+- **Acceptance = HTTP success + explicit success status + a QR.** HTTP 200 alone is not acceptance.
+- Keep a dry-run (build + save XML, no POST).
 
-## Common mistakes (each maps to a validator rule)
+## Common mistakes (each maps to a rule)
 
-- Amounts with 2–3 decimals → `JOF-AMT-001`. `currencyID="JOD"` on amounts → `JOF-AMT-002`.
-- ICV as a UUID or invoice number → `JOF-HDR-008`.
-- Discount baked into unit price instead of a line `AllowanceCharge` → `JOF-MTH-001/006`.
-- `TaxExclusiveAmount` after discount (it is gross, **before** discount) → `JOF-MTH-006`.
-- Credit note referencing the invoice number or QR instead of the original UUID → `JOF-RET-002`.
-- Negating amounts on returns → `JOF-AMT-003`.
-- Reordering elements (UBL is order-sensitive) → `JOF-XML-004`.
-- Picking the return's type name from a config default instead of the original's track → sales
-  invoice returned as `381/011` → `JOF-STA-007` / `JOF-INC-001`. Derive it from the original.
-- Resending a return with a fresh UUID under the same return number → `JOF-STA-002`. Guard returns
-  exactly like invoices.
-- `DocumentDescription` computed without VAT when the original XML is missing → `JOF-RET-008`.
-  Store the original PayableAmount at submission time.
-- Multiple partial returns must never exceed the original total in sum → `JOF-STA-005`.
+- Using `Z` for zero-rated or `E` for exempt → `JOF-LIN-007` / `JOF-LIN-006`. Z is exempt, O is zero-rated.
+- A VAT rate outside the list (e.g. 6%) → `JOF-LIN-009`.
+- Walk-in buyer ID like `-` or a scheme like `NAT` → `JOF-PTY-005`.
+- Invoice-level discount not spread over lines → `JOF-MTH-005`.
+- Sales return built like an invoice (no TaxableAmount/BaseQuantity/subtotals/PrepaidAmount) → `JOF-RET-006/009/010/011`.
+- Returning a receivable (022) invoice as 012 → `JOF-STA-007`.
+- Renumbering return lines 1..n instead of the original line numbers → `JOF-STA-009`.
+- Returning more than was sold across several returns → `JOF-STA-005`.
 
-Full field map, math, response parsing, credit-note flow and honest unknowns: [reference.md](reference.md).
+Field map, formulas and special-sales details: [reference.md](reference.md).

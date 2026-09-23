@@ -6,15 +6,15 @@ JoFotara (فوترة, Jordan's ISTD e-invoicing system) has no test environment.
 see if your XML is right is to send a real invoice with real credentials and create a real
 tax record. `jofotara-kit` lets you get the shape right locally first:
 
-- **`validate`** — lints JoFotara UBL 2.1 XML against rules learned from documents accepted by the
-  live API: 9-decimal amounts, `currencyID="JO"`, numeric ICV, type codes, totals math,
-  credit-note references, element order, and more. Every finding says how to fix it.
+- **`validate`** — lints JoFotara UBL 2.1 XML against the rules of the official ISTD technical
+  guide (v1.4): type names, tax categories `S`/`Z`/`O` and allowed VAT rates, buyer IDs,
+  totals formulas, return references and the extra fields sales returns need. Every finding
+  cites the manual page and says how to fix it.
 - **`serve`** — a local mock of `POST /core/invoices/`: same path, same `Client-Id` /
   `Secret-Key` headers, same `{"invoice": base64}` body, `EINV_STATUS` / `EINV_RESULTS` /
-  `EINV_QR`-shaped responses. It remembers what it accepted, so duplicate submissions and
-  credit notes against unknown originals are rejected.
-- **`template`** — prints a sales invoice (388) or credit note (381) in the exact shape the
-  live API accepted.
+  `EINV_QR`-shaped responses. It remembers what it accepted, so duplicates, returns against
+  unknown invoices and **over-returns across several partial returns** are rejected, line by line.
+- **`template`** — prints sales and income invoices and (partial) returns in the manual's shape.
 - **Agent skill** — teaches Claude Code, Cursor, Devin, Codex & co. how JoFotara works and
   makes them validate their own output instead of guessing.
 
@@ -91,29 +91,30 @@ const report = validate(xml);
 if (!report.ok) throw new Error(report.findings.map((f) => `${f.rule}: ${f.message}`).join('\n'));
 ```
 
-## Confidence levels
+## Where the rules come from
 
-JoFotara publishes no validator, so every rule states where it comes from:
+Every rule states its source:
 
-| Confidence | Meaning |
+| Source | Meaning |
 |---|---|
-| `verified` | The passing shape/value has been accepted by the live API. |
-| `reported` | Documented by other integrators or SDKs, not observed first-hand. |
-| `inferred` | Follows from UBL 2.1 or common sense; not confirmed against the live API. |
+| `manual p.N` | Stated in the ISTD technical guide for the e-invoicing API, v1.4 (2023-12-01), page N. |
+| `verified` | Observed on the live API and contributed back with a redacted response. |
+| `inferred` | Follows from UBL 2.1 or accounting common sense; not in the manual. |
 
 Run `npx jofotara-kit rules` for the full list.
 
 ## Scope
 
-Sales invoices (388, `012` cash / `022` receivable), income invoices (388/`011`, no VAT),
-and their credit notes (381) — full, partial and multiple returns, with cross-track checks.
-All in JOD. Special sales (`013`/`023`) and income receivable (`021`) are not covered yet.
+All six document families in the manual, in JOD: income (`011`/`021`), general sales
+(`012`/`022`) and special sales (`013`/`023`), each as new invoice (388) and return (381) —
+full, partial and multiple returns.
 
 ## Contributing
 
-The most valuable contribution is **a real JoFotara rejection the kit didn't predict** —
-the XML (redacted: tax numbers, names, TSP) and the response body. That is how `inferred`
-rules become `verified`. Never share your Client-Id or Secret-Key.
+The most valuable contribution is **a real JoFotara response** — especially a rejection the
+kit didn't predict — with the XML (redacted: tax numbers, names, income source sequence) and
+the response body. That is how `inferred` rules become `verified`. Never share your Client-Id
+or Secret-Key.
 
 ```bash
 npm install
