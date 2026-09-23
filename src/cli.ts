@@ -16,8 +16,8 @@ Usage:
   jofotara-kit serve [--port 8080] [--host 127.0.0.1] [--client-id ID] [--secret-key KEY] [--reject-status 400]
                                                Run a local mock of POST /core/invoices/
   jofotara-kit template <invoice|credit-note|income-invoice|income-credit-note> [--body]
-                                               Print a live-accepted sample (or its JSON request body)
-  jofotara-kit rules [--json]                  List every rule with severity and confidence
+                                               Print a sample in the manual's shape (or its JSON request body)
+  jofotara-kit rules [--json]                  List every rule with severity and source (manual page)
   jofotara-kit mcp                             MCP server over stdio (validate_invoice, get_template, list_rules, explain_rule)
 
 Exit codes: 0 ok, 1 validation errors, 2 usage error.
@@ -31,7 +31,7 @@ function printReport(name: string, r: Report) {
   console.log(`${head}  ${name}  (${kind}, ${r.errors} errors, ${r.warnings} warnings)`);
   for (const f of r.findings) {
     const sev = f.severity === 'error' ? color('red', 'error  ') : color('yellow', 'warning');
-    console.log(`  ${sev} ${color('bold', f.rule)} ${f.message} ${color('dim', `[${f.confidence}]`)}`);
+    console.log(`  ${sev} ${color('bold', f.rule)} ${f.message} ${color('dim', `[${f.source ? `manual ${f.source}` : f.confidence}]`)}`);
     if (f.path) console.log(color('dim', `          at ${f.path}`));
     console.log(color('dim', `          fix: ${f.fix}`));
   }
@@ -103,7 +103,7 @@ async function main(argv: string[]): Promise<number> {
     case 'rules': {
       const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean' } } });
       if (values.json) console.log(JSON.stringify(RULES, null, 2));
-      else for (const r of RULES) console.log(`${r.id}  ${r.severity.padEnd(7)}  ${r.confidence.padEnd(8)}  ${r.title}`);
+      else for (const r of RULES) console.log(`${r.id}  ${r.severity.padEnd(7)}  ${(r.source ? `manual ${r.source}` : r.confidence).padEnd(22)}  ${r.title}`);
       return 0;
     }
     case undefined:

@@ -20,15 +20,15 @@ export function createMcpServer(version: string): McpServer {
     description:
       'Validate a JoFotara (Jordan ISTD e-invoicing) document before sending it. Accepts raw UBL 2.1 XML, the ' +
       '{"invoice": "<base64>"} request body, or bare base64. Returns ok/errors/warnings and every finding with rule id, ' +
-      'path, confidence (verified/reported/inferred) and the exact fix. Run it on every XML you generate.',
+      'path, source (ISTD manual page) and the exact fix. Run it on every XML you generate.',
     inputSchema: { input: z.string().describe('XML, JSON request body, or base64') },
   }, async ({ input }) => text(validate(input)));
 
   server.registerTool('get_template', {
     title: 'Get JoFotara sample document',
     description:
-      'Return a sample document in the exact shape accepted by the live JoFotara API. Copy its element order, ' +
-      'attributes and formatting; only values change. sales = 388/012 with VAT, income = 388/011 without TaxTotal.',
+      'Return a sample document in the shape documented by the ISTD manual. Copy its element order, ' +
+      'attributes and formatting; only values change. sales = 388/012 with VAT, income = 388/011 without TaxTotal; credit notes are partial returns.',
     inputSchema: {
       name: z.enum(Object.keys(TEMPLATES) as [TemplateName, ...TemplateName[]]),
       format: z.enum(['xml', 'request-body']).default('xml'),
