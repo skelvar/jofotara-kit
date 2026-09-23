@@ -1,6 +1,6 @@
 ---
 name: jofotara
-description: Use when building, reviewing or debugging an integration with JoFotara (فوترة / نظام الفوترة الوطني, Jordan ISTD e-invoicing) — generating UBL 2.1 invoice XML, POSTing to backend.jofotara.gov.jo/core/invoices/, Client-Id/Secret-Key auth, InvoiceTypeCode 388/381 with name 012/022, ICV, income source sequence (TSP), EINV_STATUS/EINV_QR responses, credit notes/returns, or diagnosing a JoFotara rejection. Sales invoices and their credit notes.
+description: Use when building, reviewing or debugging an integration with JoFotara (فوترة / نظام الفوترة الوطني, Jordan ISTD e-invoicing) — generating UBL 2.1 invoice XML, POSTing to backend.jofotara.gov.jo/core/invoices/, Client-Id/Secret-Key auth, InvoiceTypeCode 388/381 with name 012/022, ICV, income source sequence (TSP), EINV_STATUS/EINV_QR responses, credit notes/returns (full, partial, multiple), or diagnosing a JoFotara rejection. Sales (012/022) and income (011) invoices and their credit notes.
 ---
 
 # JoFotara integration
