@@ -2,7 +2,7 @@ export type Severity = 'error' | 'warning';
 
 /**
  * How sure we are that the live JoFotara API behaves this way.
- * - verified: the passing shape/value was accepted by the live API in production.
+ * - verified: the passing shape/value has been accepted by the live API.
  * - reported: documented by other integrators or SDKs, not observed first-hand.
  * - inferred: follows from UBL 2.1 or common sense; not confirmed against the live API.
  */
@@ -33,11 +33,11 @@ const defs = {
   'JOF-HDR-002': ['error', 'verified', 'UUID must be an RFC 4122 UUID', 'Generate a fresh random UUID v4 per submission (crypto.randomUUID()). Never use the invoice number.'],
   'JOF-HDR-003': ['error', 'verified', 'IssueDate must be a valid YYYY-MM-DD date', 'Format the sale date as YYYY-MM-DD (not dd-mm-yyyy, no time part).'],
   'JOF-HDR-004': ['error', 'verified', 'InvoiceTypeCode must be 388 (invoice) or 381 (credit note)', 'Use 388 for sales invoices and 381 for returns.'],
-  'JOF-HDR-005': ['error', 'verified', 'InvoiceTypeCode name must be 011 (income), 012 (sales cash) or 022 (sales receivable)', 'Use name="011" for income-tax documents, "012" for cash sales, "022" for receivable sales.'],
-  'JOF-HDR-006': ['warning', 'reported', 'InvoiceTypeCode name is outside the verified tracks', 'Income receivable (021) and special-sales (013/023) exist but are not covered by verified rules; validate carefully.'],
+  'JOF-HDR-005': ['error', 'reported', 'Unknown InvoiceTypeCode name', 'Use 011/021 (income cash/receivable), 012/022 (sales cash/receivable) or 013/023 (special sales cash/receivable).'],
+  'JOF-HDR-006': ['warning', 'reported', 'InvoiceTypeCode name is outside the verified set', 'Only 011, 012 and 022 have been observed accepted. 021 (income receivable) and 013/023 (special sales) follow the same track rules but are unverified.'],
   'JOF-HDR-007': ['error', 'verified', 'Document and tax currency must be JOD', 'Emit JOD in <cbc:DocumentCurrencyCode> and <cbc:TaxCurrencyCode>.'],
   'JOF-HDR-008': ['error', 'verified', 'ICV must be numeric', 'Put a numeric counter (ideally increasing) in the ICV <cbc:UUID>, not a UUID or document number.'],
-  'JOF-HDR-009': ['warning', 'verified', '<cbc:Note> should always be present', 'Emit <cbc:Note/> even when there is no note; production always sends it.'],
+  'JOF-HDR-009': ['warning', 'verified', '<cbc:Note> should always be present', 'Emit <cbc:Note/> even when there is no note; accepted documents always carry it.'],
   'JOF-HDR-010': ['warning', 'inferred', 'IssueDate is in the future', 'Use the actual sale date.'],
 
   'JOF-PTY-001': ['error', 'verified', 'Seller tax number is required', 'Set AccountingSupplierParty/Party/PartyTaxScheme/CompanyID to your tax number.'],
@@ -57,14 +57,14 @@ const defs = {
   'JOF-LIN-001': ['warning', 'verified', 'Line IDs should be 1, 2, 3, ...', 'Number InvoiceLine/cbc:ID sequentially starting at 1.'],
   'JOF-LIN-002': ['error', 'verified', 'Quantity must be greater than zero', 'Send a positive quantity (default 1).'],
   'JOF-LIN-003': ['warning', 'verified', 'Quantity should have 2 decimal places', 'Format quantities with toFixed(2).'],
-  'JOF-LIN-004': ['warning', 'verified', 'unitCode should be PCE', 'Only unitCode="PCE" has been exercised in production.'],
+  'JOF-LIN-004': ['warning', 'verified', 'unitCode should be PCE', 'Only unitCode="PCE" has been observed accepted.'],
   'JOF-LIN-005': ['error', 'verified', 'Item name is required', 'Set InvoiceLine/cac:Item/cbc:Name.'],
   'JOF-LIN-006': ['error', 'verified', 'Tax category must match the tax amount', 'Use S when the line has VAT (> 0), Z for zero-rated or E for exempt when tax is 0.'],
   'JOF-LIN-007': ['warning', 'reported', 'Exempt (E) tax category is unverified', 'E exists in the code list and in other SDKs but was never exercised against the live API by this kit.'],
   'JOF-LIN-008': ['warning', 'verified', 'Tax percent should be 2 decimals and match tax / line amount', 'Derive Percent = tax / LineExtensionAmount × 100, formatted with toFixed(2) (0.00 for Z/E).'],
 
-  'JOF-INC-001': ['error', 'verified', 'Income documents (name="011") must not carry TaxTotal', 'Omit both the document-level and per-line <cac:TaxTotal> on income invoices and income returns.'],
-  'JOF-INC-002': ['error', 'verified', 'Sales documents (012/022) require TaxTotal', 'Emit the document-level <cac:TaxTotal> and a per-line <cac:TaxTotal> on every sales invoice line, even for zero-rated lines.'],
+  'JOF-INC-001': ['error', 'reported', 'Income documents (name 011/021) must not carry TaxTotal', 'Omit both the document-level and per-line <cac:TaxTotal> on income invoices and income returns.'],
+  'JOF-INC-002': ['error', 'verified', 'Sales documents (012/022/013/023) require TaxTotal', 'Emit the document-level <cac:TaxTotal> and a per-line <cac:TaxTotal> on every sales invoice line, even for zero-rated lines.'],
 
   'JOF-MTH-001': ['error', 'verified', 'LineExtensionAmount must equal max(quantity × price − discount, 0)', 'Compute line net before tax from quantity, unit price and the line discount.'],
   'JOF-MTH-002': ['error', 'verified', 'Line RoundingAmount must equal LineExtensionAmount + line tax', 'RoundingAmount is the line total including tax.'],
@@ -80,7 +80,7 @@ const defs = {
   'JOF-RET-003': ['error', 'verified', 'BillingReference DocumentDescription must be the original payable total (9 dp)', 'Put the original invoice PayableAmount, formatted with toFixed(9).'],
   'JOF-RET-004': ['error', 'verified', 'Return reason is required', 'Add <cbc:InstructionNote> with the reason inside <cac:PaymentMeans>.'],
   'JOF-RET-005': ['warning', 'inferred', 'Invoice (388) carries a BillingReference', 'Only credit notes (381) should reference an original invoice.'],
-  'JOF-RET-006': ['warning', 'verified', 'Credit note name="022" is unverified', 'Production sales returns always used name="012", even for receivable originals.'],
+  'JOF-RET-006': ['warning', 'verified', 'Credit note name="022" is unverified', 'Accepted sales returns used name="012", even for receivable originals.'],
   'JOF-RET-007': ['error', 'verified', 'Credit note must have its own UUID', 'Generate a fresh UUID for the return; the original UUID goes only in BillingReference.'],
   'JOF-RET-008': ['error', 'inferred', 'Credit note total exceeds the original invoice total', 'A return can credit at most the original PayableAmount (DocumentDescription).'],
 

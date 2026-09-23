@@ -14,7 +14,7 @@ export interface Finding {
 
 export interface InvoiceSummary {
   kind: 'invoice' | 'credit-note';
-  /** income = name 011 (no VAT), sales = 012/022. */
+  /** income = name 011/021 (no VAT), sales = 012/022/013/023. */
   track: 'income' | 'sales' | 'other';
   id: string;
   uuid: string;
@@ -44,6 +44,9 @@ export const ORDER = [
 ];
 // cac:TaxTotal is track-dependent: required for sales, forbidden for income (checked separately).
 const OPTIONAL = new Set(['cbc:Note', 'cac:BillingReference', 'cac:AllowanceCharge', 'cac:TaxTotal']);
+const INCOME_NAMES = new Set(['011', '021']);
+const SALES_NAMES = new Set(['012', '022', '013', '023']);
+const VERIFIED_NAMES = new Set(['011', '012', '022']);
 const REPEATABLE = new Set(['cac:AdditionalDocumentReference', 'cac:InvoiceLine']);
 const AMOUNT_NAMES = new Set([
   'Amount', 'TaxAmount', 'RoundingAmount', 'LineExtensionAmount', 'PriceAmount',
@@ -165,10 +168,11 @@ export function validateXml(xml: string): Report {
   const typeName = typeEl?.getAttribute('name') ?? '';
   const kind: InvoiceSummary['kind'] | undefined = typeCode === '381' ? 'credit-note' : typeCode === '388' ? 'invoice' : undefined;
   if (typeEl && !kind) add('JOF-HDR-004', `InvoiceTypeCode is "${typeCode}".`, typeEl);
-  const track: InvoiceSummary['track'] = typeName === '011' ? 'income' : typeName === '012' || typeName === '022' ? 'sales' : 'other';
+  // name = <payment><track>: 0[1 cash|2 receivable][1 income|2 general sales|3 special sales].
+  const track: InvoiceSummary['track'] = INCOME_NAMES.has(typeName) ? 'income' : SALES_NAMES.has(typeName) ? 'sales' : 'other';
   const income = track === 'income';
-  if (typeEl && track === 'other') {
-    add(/^0[12]\d$/.test(typeName) ? 'JOF-HDR-006' : 'JOF-HDR-005', `InvoiceTypeCode name="${typeName}".`, typeEl);
+  if (typeEl && !VERIFIED_NAMES.has(typeName)) {
+    add(track === 'other' ? 'JOF-HDR-005' : 'JOF-HDR-006', `InvoiceTypeCode name="${typeName}".`, typeEl);
   }
   const lineTaxTotals = kids(root, 'cac:InvoiceLine').map((l) => at(l, 'cac:TaxTotal')).filter((e) => e !== undefined);
   if (income && (seen.has('cac:TaxTotal') || lineTaxTotals.length)) {

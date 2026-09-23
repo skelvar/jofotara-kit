@@ -100,6 +100,16 @@ describe('validate', () => {
     assert.ok(rules(salesWithoutTax).includes('JOF-INC-002'));
   });
 
+  it('classifies unverified names by track: 021 income, 013/023 sales', () => {
+    const inc021 = validate(sampleInvoice({ track: 'income' }).replace('name="011"', 'name="021"'));
+    assert.deepEqual(inc021.findings.map((f) => f.rule), ['JOF-HDR-006']);
+    assert.equal(inc021.invoice?.track, 'income');
+    const special = validate(invoice.replace('name="012"', 'name="013"'));
+    assert.deepEqual(special.findings.map((f) => f.rule), ['JOF-HDR-006']);
+    assert.equal(special.invoice?.track, 'sales');
+    assert.deepEqual(rules(invoice.replace('name="012"', 'name="099"')), ['JOF-HDR-005']);
+  });
+
   it('rejects a credit note larger than the original total', () => {
     assert.deepEqual(rules(sampleCreditNote({ ...ORIGINAL, payable: 10 })), ['JOF-RET-008']);
   });
